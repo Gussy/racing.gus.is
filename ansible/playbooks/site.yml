@@ -1,0 +1,12 @@
+---
+- name: Configure racing.gus.is
+  hosts: all
+  roles:
+    - common
+    - volume
+    - tailscale
+    - postgresql
+    - grafana
+    - racetelem
+    - caddy
+    - lockdown

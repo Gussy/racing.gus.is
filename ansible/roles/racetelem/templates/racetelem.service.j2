@@ -1,0 +1,23 @@
+[Unit]
+Description=racetelem telemetry relay
+After=postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=racetelem
+Group=racetelem
+EnvironmentFile=/etc/racetelem.env
+ExecStart=/opt/racetelem/racetelem
+Restart=always
+RestartSec=5s
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/opt/racetelem
+
+[Install]
+WantedBy=multi-user.target

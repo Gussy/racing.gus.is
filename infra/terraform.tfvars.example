@@ -1,0 +1,8 @@
+# Copy to terraform.tfvars and fill in values
+# do_token is read from DIGITALOCEAN_TOKEN env var (preferred) or set here
+# do_token = "dop_v1_..."
+
+ssh_key_fingerprint = "your:ssh:key:fingerprint:here"
+# region            = "sfo3"
+# droplet_size      = "s-1vcpu-2gb"
+# droplet_image     = "ubuntu-24-04-x64"

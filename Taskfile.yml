@@ -1,0 +1,104 @@
+version: "3"
+
+vars:
+  INFRA_DIR: infra
+  ANSIBLE_DIR: ansible
+  INVENTORY: "{{.ANSIBLE_DIR}}/inventory/hosts.yml"
+
+tasks:
+  build:
+    desc: Cross-compile racetelem for linux/amd64
+    cmds:
+      - ./scripts/build-racetelem.sh
+
+  infra-init:
+    desc: Initialize OpenTofu
+    dir: "{{.INFRA_DIR}}"
+    cmds:
+      - tofu init
+
+  infra-plan:
+    desc: Preview infrastructure changes
+    dir: "{{.INFRA_DIR}}"
+    cmds:
+      - tofu plan
+
+  infra-apply:
+    desc: Apply infrastructure changes
+    dir: "{{.INFRA_DIR}}"
+    cmds:
+      - tofu apply
+
+  setup-vault:
+    desc: Generate credentials, store in Bitwarden, create encrypted vault
+    cmds:
+      - ./scripts/setup-vault.sh
+
+  ansible-deps:
+    desc: Install Ansible collection dependencies
+    dir: "{{.ANSIBLE_DIR}}"
+    cmds:
+      - ansible-galaxy collection install -r requirements.yml
+
+  inventory:
+    desc: Generate Ansible inventory from OpenTofu outputs (public IP)
+    cmds:
+      - |
+        DROPLET_IP=$(cd {{.INFRA_DIR}} && tofu output -raw droplet_ip)
+        printf 'all:\n  hosts:\n    racing:\n      ansible_host: "%s"\n      ansible_user: root\n' "$DROPLET_IP" > {{.INVENTORY}}
+        echo "Wrote $DROPLET_IP to {{.INVENTORY}}"
+
+  inventory-tailscale:
+    desc: Set Ansible inventory to use Tailscale hostname
+    cmds:
+      - |
+        printf 'all:\n  hosts:\n    racing:\n      ansible_host: "racing-gus-is"\n      ansible_user: gus\n' > {{.INVENTORY}}
+        echo "Wrote Tailscale hostname to {{.INVENTORY}}"
+
+  bootstrap:
+    desc: First-time server setup (public SSH, then locks down)
+    deps: [inventory, ansible-deps]
+    dir: "{{.ANSIBLE_DIR}}"
+    cmds:
+      - cd ../{{.INFRA_DIR}} && tofu apply -var="allow_public_ssh=true" -auto-approve
+      - ansible-playbook playbooks/site.yml --user root
+      - cd ../{{.INFRA_DIR}} && tofu apply -auto-approve
+
+  configure:
+    desc: Full server configuration (connects via Tailscale)
+    deps: [inventory-tailscale, ansible-deps]
+    dir: "{{.ANSIBLE_DIR}}"
+    cmds:
+      - ansible-playbook playbooks/site.yml
+
+  deploy:
+    desc: Build and deploy just the racetelem binary
+    deps: [build, inventory-tailscale]
+    dir: "{{.ANSIBLE_DIR}}"
+    cmds:
+      - ansible-playbook playbooks/deploy-racetelem.yml
+
+  spinup:
+    desc: Create droplet, attach volume, configure everything
+    cmds:
+      - cd {{.INFRA_DIR}} && tofu apply -var="create_droplet=true" -var="allow_public_ssh=true" -auto-approve
+      - task: inventory
+      - task: ansible-deps
+      - |
+        echo "Waiting for SSH..."
+        IP=$(cd {{.INFRA_DIR}} && tofu output -raw droplet_ip)
+        until ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new root@"$IP" true 2>/dev/null; do
+          sleep 5
+        done
+        echo "SSH ready."
+      - cd {{.ANSIBLE_DIR}} && ansible-playbook playbooks/site.yml --user root
+      - cd {{.INFRA_DIR}} && tofu apply -var="create_droplet=true" -auto-approve
+      - echo "Server is up at $(cd {{.INFRA_DIR}} && tofu output -raw droplet_ip) — DNS updated automatically."
+
+  teardown:
+    desc: Destroy droplet but keep the data volume
+    dir: "{{.INFRA_DIR}}"
+    prompt: This will destroy the droplet. Data on the volume is preserved. Continue?
+    cmds:
+      - tofu apply -var="create_droplet=false" -auto-approve
+      - echo "Droplet destroyed. Volume preserved."

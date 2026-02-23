@@ -1,0 +1,80 @@
+---
+- name: Wait for automatic apt operations to finish
+  shell: while fuser /var/lib/apt/lists/lock /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 5; done
+  changed_when: false
+
+- name: Update apt cache
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+
+- name: Install base packages
+  apt:
+    name:
+      - ufw
+      - fail2ban
+      - curl
+      - gnupg
+      - unattended-upgrades
+      - apt-transport-https
+      - ca-certificates
+      - python3-apt
+    state: present
+
+- name: Create gus user
+  user:
+    name: gus
+    shell: /bin/bash
+    groups: sudo
+    append: yes
+
+- name: Allow gus passwordless sudo
+  copy:
+    content: "gus ALL=(ALL) NOPASSWD:ALL\n"
+    dest: /etc/sudoers.d/gus
+    mode: "0440"
+    validate: "visudo -cf %s"
+
+- name: Set UFW default deny incoming
+  ufw:
+    direction: incoming
+    policy: deny
+
+- name: Set UFW default allow outgoing
+  ufw:
+    direction: outgoing
+    policy: allow
+
+- name: Allow SSH
+  ufw:
+    rule: allow
+    port: "22"
+    proto: tcp
+
+- name: Allow HTTP
+  ufw:
+    rule: allow
+    port: "80"
+    proto: tcp
+
+- name: Allow HTTPS
+  ufw:
+    rule: allow
+    port: "443"
+    proto: tcp
+
+- name: Allow Tailscale WireGuard
+  ufw:
+    rule: allow
+    port: "41641"
+    proto: udp
+
+- name: Enable UFW
+  ufw:
+    state: enabled
+
+- name: Enable fail2ban
+  systemd:
+    name: fail2ban
+    enabled: yes
+    state: started

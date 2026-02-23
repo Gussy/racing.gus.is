@@ -1,0 +1,23 @@
+---
+# Domain
+domain: racing.gus.is
+
+# PostgreSQL
+pg_version: "16"
+pg_user: racetelem
+pg_database: racetelem
+
+# Racetelem
+racetelem_port: 8080
+
+# Grafana
+grafana_port: 3000
+grafana_plugins:
+  - alexandra-trackmap-panel
+  - grafana-clock-panel
+  - grafana-worldmap-panel
+  - orchestracities-iconstat-panel
+  - pr0ps-trackmap-panel
+  - ryantxu-ajax-panel
+  - vonage-status-panel
+grafana_allow_unsigned_plugins: "pr0ps-trackmap-panel,grafana-clock-panel"

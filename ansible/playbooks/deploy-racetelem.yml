@@ -1,0 +1,5 @@
+---
+- name: Deploy racetelem binary
+  hosts: all
+  roles:
+    - racetelem

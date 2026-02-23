@@ -1,0 +1,14 @@
+---
+- name: Create mount point
+  file:
+    path: /mnt/data
+    state: directory
+    mode: "0755"
+
+- name: Mount the data volume
+  mount:
+    path: /mnt/data
+    src: /dev/disk/by-id/scsi-0DO_Volume_racing-gus-is-data
+    fstype: ext4
+    opts: defaults,nofail,discard
+    state: mounted

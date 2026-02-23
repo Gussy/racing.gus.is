@@ -1,0 +1,66 @@
+---
+- name: Add Grafana signing key
+  apt_key:
+    url: https://apt.grafana.com/gpg.key
+    state: present
+    keyring: /usr/share/keyrings/grafana-archive-keyring.gpg
+
+- name: Add Grafana APT repository
+  apt_repository:
+    repo: "deb [signed-by=/usr/share/keyrings/grafana-archive-keyring.gpg] https://apt.grafana.com stable main"
+    state: present
+    filename: grafana
+
+- name: Install Grafana
+  apt:
+    name: grafana
+    state: present
+    update_cache: yes
+
+- name: Create Grafana data directory on volume
+  file:
+    path: /mnt/data/grafana
+    state: directory
+    owner: grafana
+    group: grafana
+    mode: "0750"
+
+- name: Template grafana.ini
+  template:
+    src: grafana.ini.j2
+    dest: /etc/grafana/grafana.ini
+    owner: root
+    group: grafana
+    mode: "0640"
+  notify: Restart Grafana
+
+- name: Create provisioning datasources directory
+  file:
+    path: /etc/grafana/provisioning/datasources
+    state: directory
+    owner: root
+    group: grafana
+    mode: "0755"
+
+- name: Template datasource provisioning
+  template:
+    src: datasource.yml.j2
+    dest: /etc/grafana/provisioning/datasources/racetelem.yml
+    owner: root
+    group: grafana
+    mode: "0640"
+  notify: Restart Grafana
+
+- name: Install Grafana plugins
+  command: grafana-cli plugins install {{ item }}
+  loop: "{{ grafana_plugins }}"
+  register: plugin_result
+  changed_when: "'Installed' in plugin_result.stdout"
+  failed_when: plugin_result.rc != 0 and 'already installed' not in plugin_result.stderr
+  notify: Restart Grafana
+
+- name: Enable and start Grafana
+  systemd:
+    name: grafana-server
+    enabled: yes
+    state: started

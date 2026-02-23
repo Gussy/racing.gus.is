@@ -1,0 +1,13 @@
+---
+- name: Block public SSH (only allow over Tailscale)
+  ufw:
+    rule: deny
+    port: "22"
+    proto: tcp
+
+- name: Disable password authentication for SSH
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication no"
+  notify: Reload SSH

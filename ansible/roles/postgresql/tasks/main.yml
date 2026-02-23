@@ -1,0 +1,129 @@
+---
+- name: Add PostgreSQL signing key
+  apt_key:
+    url: https://www.postgresql.org/media/keys/ACCC4CF8.asc
+    state: present
+    keyring: /usr/share/keyrings/pgdg-archive-keyring.gpg
+
+- name: Add PostgreSQL APT repository
+  apt_repository:
+    repo: "deb [signed-by=/usr/share/keyrings/pgdg-archive-keyring.gpg] https://apt.postgresql.org/pub/repos/apt {{ ansible_distribution_release }}-pgdg main"
+    state: present
+    filename: pgdg
+
+- name: Add TimescaleDB signing key
+  apt_key:
+    url: https://packagecloud.io/timescale/timescaledb/gpgkey
+    state: present
+    keyring: /usr/share/keyrings/timescaledb-archive-keyring.gpg
+
+- name: Add TimescaleDB APT repository
+  apt_repository:
+    repo: "deb [signed-by=/usr/share/keyrings/timescaledb-archive-keyring.gpg] https://packagecloud.io/timescale/timescaledb/ubuntu/ {{ ansible_distribution_release }} main"
+    state: present
+    filename: timescaledb
+
+- name: Install PostgreSQL and TimescaleDB
+  apt:
+    name:
+      - "postgresql-{{ pg_version }}"
+      - "timescaledb-2-postgresql-{{ pg_version }}"
+      - python3-psycopg2
+    state: present
+    update_cache: yes
+
+- name: Stop PostgreSQL for data directory setup
+  systemd:
+    name: postgresql
+    state: stopped
+
+- name: Create PostgreSQL volume directory
+  file:
+    path: /mnt/data/postgresql
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: "0700"
+
+- name: Check if data already exists on volume
+  stat:
+    path: /mnt/data/postgresql/{{ pg_version }}
+  register: pg_volume_data
+
+- name: Move PostgreSQL data to volume (first run only)
+  command: rsync -av /var/lib/postgresql/{{ pg_version }}/ /mnt/data/postgresql/{{ pg_version }}/
+  when: not pg_volume_data.stat.exists
+
+- name: Set ownership on volume data (first run only)
+  file:
+    path: /mnt/data/postgresql
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: "0700"
+    recurse: yes
+  when: not pg_volume_data.stat.exists
+
+- name: Point PostgreSQL data_directory to volume
+  lineinfile:
+    path: "/etc/postgresql/{{ pg_version }}/main/postgresql.conf"
+    regexp: "^#?data_directory"
+    line: "data_directory = '/mnt/data/postgresql/{{ pg_version }}/main'"
+  notify: Restart PostgreSQL
+
+- name: Run timescaledb-tune
+  command: timescaledb-tune --quiet --yes --pg-version={{ pg_version }}
+  changed_when: false
+
+- name: Ensure shared_preload_libraries includes timescaledb
+  lineinfile:
+    path: "/etc/postgresql/{{ pg_version }}/main/postgresql.conf"
+    regexp: "^shared_preload_libraries"
+    line: "shared_preload_libraries = 'timescaledb'"
+  notify: Restart PostgreSQL
+
+- name: Ensure listen_addresses is localhost
+  lineinfile:
+    path: "/etc/postgresql/{{ pg_version }}/main/postgresql.conf"
+    regexp: "^#?listen_addresses"
+    line: "listen_addresses = 'localhost'"
+  notify: Restart PostgreSQL
+
+- name: Ensure PostgreSQL is started
+  systemd:
+    name: postgresql
+    enabled: yes
+    state: started
+
+- name: Flush handlers to restart PostgreSQL if needed
+  meta: flush_handlers
+
+- name: Create racetelem database user
+  become_user: postgres
+  community.postgresql.postgresql_user:
+    name: "{{ pg_user }}"
+    password: "{{ vault_pg_password }}"
+    state: present
+
+- name: Create racetelem database
+  become_user: postgres
+  community.postgresql.postgresql_db:
+    name: "{{ pg_database }}"
+    owner: "{{ pg_user }}"
+    state: present
+
+- name: Enable TimescaleDB extension
+  become_user: postgres
+  community.postgresql.postgresql_ext:
+    name: timescaledb
+    db: "{{ pg_database }}"
+    state: present
+
+- name: Apply schema
+  become_user: postgres
+  community.postgresql.postgresql_script:
+    db: "{{ pg_database }}"
+    path: "{{ role_path }}/files/schema.sql"
+  register: schema_result
+  changed_when: false
+  failed_when: schema_result.rc is defined and schema_result.rc != 0

@@ -1,0 +1,50 @@
+---
+- name: Create racetelem system user
+  user:
+    name: racetelem
+    system: yes
+    shell: /usr/sbin/nologin
+    create_home: no
+
+- name: Create /opt/racetelem directory
+  file:
+    path: /opt/racetelem
+    state: directory
+    owner: racetelem
+    group: racetelem
+    mode: "0755"
+
+- name: Copy racetelem binary
+  copy:
+    src: "{{ playbook_dir }}/../files/racetelem"
+    dest: /opt/racetelem/racetelem
+    owner: racetelem
+    group: racetelem
+    mode: "0755"
+  notify: Restart racetelem
+
+- name: Template racetelem environment file
+  template:
+    src: racetelem.env.j2
+    dest: /etc/racetelem.env
+    owner: root
+    group: racetelem
+    mode: "0640"
+  notify: Restart racetelem
+
+- name: Template racetelem systemd service
+  template:
+    src: racetelem.service.j2
+    dest: /etc/systemd/system/racetelem.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Reload systemd
+    - Restart racetelem
+
+- name: Enable and start racetelem
+  systemd:
+    name: racetelem
+    enabled: yes
+    state: started

@@ -1,0 +1,173 @@
+# Deploying racing.gus.is from scratch
+
+## 1. Set up local tooling
+
+Install Ansible and Python dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+## 2. Configure OpenTofu variables
+
+```bash
+cp infra/terraform.tfvars.example infra/terraform.tfvars
+```
+
+Edit `infra/terraform.tfvars` and set your SSH key fingerprint. You can find it in the DigitalOcean dashboard under Settings > Security, or with:
+
+```bash
+ssh-keygen -l -E md5 -f ~/.ssh/id_ed25519.pub
+```
+
+Set your DigitalOcean API token as an environment variable:
+
+```bash
+export DIGITALOCEAN_TOKEN="dop_v1_..."
+```
+
+The token needs the following scopes (create a custom-scoped token under API > Tokens):
+
+**Full access (25 scopes):**
+
+| Resource | Scopes |
+|----------|--------|
+| actions | read |
+| block_storage | create, read, update, delete |
+| block_storage_action | create, read |
+| domain | create, read, update, delete |
+| droplet | create, read, update, delete, admin |
+| firewall | create, read, update, delete |
+| regions | read |
+| sizes | read |
+| tag | create, read, delete |
+
+**Read access (4 scopes):**
+
+| Resource | Scopes |
+|----------|--------|
+| image | read |
+| snapshot | read |
+| ssh_key | read |
+| vpc | read |
+
+## 3. Create Ansible vault
+
+Unlock Bitwarden for your session:
+
+```bash
+bw login          # first time only
+export BW_SESSION=$(bw unlock --raw)
+```
+
+Then run the setup script. It generates passwords, stores everything in Bitwarden, and creates the encrypted vault file:
+
+```bash
+task setup-vault
+```
+
+You'll be prompted for your Tailscale auth key. To create one:
+
+1. Go to https://login.tailscale.com/admin/settings/keys
+2. Click **Generate auth key**
+3. Enable **Reusable** (so you can re-run the playbook without a new key)
+4. Copy the `tskey-auth-...` value
+
+This creates three Bitwarden items:
+- `ansible-vault/racing.gus.is` — the vault encryption password
+- `racing.gus.is/postgresql` — PG user `racetelem` with generated password
+- `racing.gus.is/grafana` — Grafana user `admin` with generated password
+
+All subsequent Ansible commands retrieve the vault password from Bitwarden automatically via `scripts/vault-pass.sh`.
+
+## 4. First-time infrastructure setup
+
+Initialize OpenTofu and import the existing domain:
+
+```bash
+task infra-init
+tofu -chdir=infra import digitalocean_domain.gus_is gus.is
+```
+
+Build the racetelem binary:
+
+```bash
+task build
+```
+
+Then spin up everything:
+
+```bash
+task spinup
+```
+
+This does the following in sequence:
+1. Creates a DigitalOcean droplet + persistent data volume + firewall (SSH temporarily open)
+2. Runs all Ansible roles via public SSH:
+   - **common** — apt packages, UFW, fail2ban
+   - **volume** — mounts the persistent data volume at `/mnt/data`
+   - **tailscale** — joins your tailnet, blocks public SSH
+   - **postgresql** — PG 16 + TimescaleDB 2.x on the data volume
+   - **grafana** — dashboards and data stored on the data volume
+   - **racetelem** — Go binary as a systemd service
+   - **caddy** — reverse proxy with automatic HTTPS
+3. Closes public SSH in the DO firewall
+4. Updates the DNS A/AAAA records to point at the new droplet IP automatically
+
+The vault password is pulled from Bitwarden automatically — make sure `BW_SESSION` is set.
+
+## 5. Verify
+
+From the server (via Tailscale: `ssh racing-gus-is`):
+
+```bash
+systemctl status postgresql grafana-server racetelem caddy
+psql -U racetelem -d racetelem -c '\dt'
+curl http://localhost:8080/api/telemetry
+```
+
+From anywhere:
+
+```bash
+curl https://racing.gus.is/api/telemetry
+open https://racing.gus.is/grafana/
+```
+
+## Subsequent deployments
+
+To redeploy just the racetelem binary after code changes:
+
+```bash
+task deploy
+```
+
+This rebuilds the binary and runs only the racetelem Ansible role.
+
+To re-run the full configuration (e.g., after changing Ansible roles):
+
+```bash
+task configure
+```
+
+Both `configure` and `deploy` connect via Tailscale (`racing-gus-is`) instead of the public IP.
+
+## Spinup / teardown cycle
+
+PostgreSQL and Grafana data live on a persistent DigitalOcean volume that survives droplet destruction. When you're not racing:
+
+```bash
+task teardown          # destroys droplet, keeps the data volume (~$0.50/month for 5GB)
+```
+
+When there's a race coming up:
+
+```bash
+task build             # rebuild racetelem if source changed
+task spinup            # creates fresh droplet, attaches volume, configures everything
+```
+
+DNS is updated automatically to the new droplet IP.
+
+## Importing data
+
+Data import from the old server is a separate step. See [TIMESCALEDB_MIGRATION.md](TIMESCALEDB_MIGRATION.md) for the recommended approach (Option C: fresh schema + CSV data load).

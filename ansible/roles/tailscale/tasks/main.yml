@@ -1,0 +1,36 @@
+---
+- name: Add Tailscale signing key
+  apt_key:
+    url: https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg
+    state: present
+    keyring: /usr/share/keyrings/tailscale-archive-keyring.gpg
+
+- name: Add Tailscale APT repository
+  apt_repository:
+    repo: "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu noble main"
+    state: present
+    filename: tailscale
+
+- name: Install Tailscale
+  apt:
+    name: tailscale
+    state: present
+    update_cache: yes
+
+- name: Enable tailscaled
+  systemd:
+    name: tailscaled
+    enabled: yes
+    state: started
+
+- name: Check if Tailscale is already authenticated
+  command: tailscale status --json
+  register: tailscale_status
+  changed_when: false
+  failed_when: false
+
+- name: Authenticate Tailscale
+  command: tailscale up --authkey={{ vault_tailscale_auth_key }} --ssh
+  when: tailscale_status.rc != 0 or (tailscale_status.stdout | from_json).BackendState != "Running"
+  # no_log: true  # uncomment after debugging
+

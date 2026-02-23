@@ -1,0 +1,26 @@
+# Hermit
+.hermit/
+
+# Agents
+.claude/
+
+# OpenTofu
+infra/.terraform/
+infra/*.tfstate
+infra/*.tfstate.backup
+infra/.terraform.lock.hcl
+infra/terraform.tfvars
+
+# Ansible
+ansible/inventory/group_vars/all/vault.yml
+ansible/*.retry
+
+# Built binaries
+ansible/files/racetelem
+
+# Environment files
+.env
+*.env
+
+# OS
+.DS_Store
