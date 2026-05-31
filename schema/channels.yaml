@@ -1,0 +1,610 @@
+# yaml-language-server: $schema=channels.schema.json
+# channels.yaml — telemetry sensor definitions
+# This file is the source of truth for proto generation and DB migrations.
+# See .PRD/08-sensor-definitions.md for the full design specification.
+#
+# DO NOT reorder or renumber tags — tag numbers are permanent.
+# To retire a sensor, move its tag to reserved_tags and run schemagen.
+# To add a sensor, use the next_tag from tag_history.lock.json.
+
+schema_version: 1
+
+# ================================================================
+# Quantities — physical measurement types with unit conversions
+#
+# Each quantity defines a base unit (stored on wire and in DB) and
+# optional display units with conversion formulas:
+#   display_value = base_value * scale + offset
+#   base_value    = (display_value - offset) / scale
+#
+# Base units have implicit scale=1, offset=0 (only symbol needed).
+# Non-base units require at least 'scale' (offset defaults to 0).
+# ================================================================
+
+quantities:
+  temperature:
+    description: "Thermodynamic temperature"
+    base_unit: celsius
+    units:
+      celsius:
+        symbol: "°C"
+      fahrenheit:
+        symbol: "°F"
+        scale: 1.8
+        offset: 32
+      kelvin:
+        symbol: "K"
+        scale: 1.0
+        offset: 273.15
+
+  pressure:
+    description: "Force per unit area"
+    base_unit: kpa
+    units:
+      kpa:
+        symbol: "kPa"
+      psi:
+        symbol: "psi"
+        scale: 0.145038
+      bar:
+        symbol: "bar"
+        scale: 0.01
+      mbar:
+        symbol: "mbar"
+        scale: 10.0
+      atm:
+        symbol: "atm"
+        scale: 0.00986923
+
+  speed:
+    description: "Linear velocity"
+    base_unit: kmh
+    units:
+      kmh:
+        symbol: "km/h"
+      mph:
+        symbol: "mph"
+        scale: 0.621371
+      ms:
+        symbol: "m/s"
+        scale: 0.277778
+      kn:
+        symbol: "kn"
+        scale: 0.539957
+
+  rotational_speed:
+    description: "Rotational velocity"
+    base_unit: rpm
+    units:
+      rpm:
+        symbol: "rpm"
+
+  acceleration:
+    description: "Acceleration (gravitational units)"
+    base_unit: g
+    units:
+      g:
+        symbol: "g"
+      ms2:
+        symbol: "m/s²"
+        scale: 9.80665
+
+  angular_rate:
+    description: "Rate of angular change"
+    base_unit: deg_per_s
+    units:
+      deg_per_s:
+        symbol: "°/s"
+      rad_per_s:
+        symbol: "rad/s"
+        scale: 0.0174533
+
+  angle:
+    description: "Angular position"
+    base_unit: degrees
+    units:
+      degrees:
+        symbol: "°"
+      radians:
+        symbol: "rad"
+        scale: 0.0174533
+
+  coordinate:
+    description: "Geographic coordinate (latitude or longitude)"
+    base_unit: degrees
+    units:
+      degrees:
+        symbol: "°"
+
+  length:
+    description: "Short linear distances (suspension travel, ride height)"
+    base_unit: mm
+    units:
+      mm:
+        symbol: "mm"
+      in:
+        symbol: "in"
+        scale: 0.0393701
+      cm:
+        symbol: "cm"
+        scale: 0.1
+
+  distance:
+    description: "Longer distances (altitude, lap distance)"
+    base_unit: m
+    units:
+      m:
+        symbol: "m"
+      km:
+        symbol: "km"
+        scale: 0.001
+      ft:
+        symbol: "ft"
+        scale: 3.28084
+      mi:
+        symbol: "mi"
+        scale: 0.000621371
+
+  voltage:
+    description: "Electrical potential"
+    base_unit: volts
+    units:
+      volts:
+        symbol: "V"
+      mv:
+        symbol: "mV"
+        scale: 1000.0
+
+  volume_flow:
+    description: "Volumetric flow rate"
+    base_unit: cc_per_min
+    units:
+      cc_per_min:
+        symbol: "cc/min"
+      l_per_hr:
+        symbol: "L/hr"
+        scale: 0.06
+      gal_per_hr:
+        symbol: "gal/hr"
+        scale: 0.0158503
+
+  force:
+    description: "Mechanical force"
+    base_unit: newtons
+    units:
+      newtons:
+        symbol: "N"
+      lbf:
+        symbol: "lbf"
+        scale: 0.224809
+      kgf:
+        symbol: "kgf"
+        scale: 0.101972
+
+  ratio:
+    description: "Dimensionless ratio (e.g., air-fuel lambda)"
+    base_unit: ratio
+    units:
+      ratio:
+        symbol: "λ"
+
+  percentage:
+    description: "Percentage (0-100)"
+    base_unit: percent
+    units:
+      percent:
+        symbol: "%"
+
+  dimensionless:
+    description: "Unitless values (gear number, satellite count, bitmasks, quality indicators)"
+    base_unit: none
+    units:
+      none:
+        symbol: ""
+
+# ================================================================
+# Sensors — telemetry channel definitions
+#
+# Naming convention: {system}_{measurement}[_{location}]
+#   system:      engine, oil, fuel, tire, brake, suspension, gps, imu, aero, etc.
+#   measurement: temp, pressure, speed, flow, level, position, angle, voltage, rpm
+#   location:    fl (front-left), fr, rl, rr, f (front), r (rear) — optional
+#
+# Tag allocation:
+#   1       = timestamp_us (structural, not a sensor)
+#   2       = extra map (structural, not a sensor)
+#   3–15    = 1-byte encoding: highest-frequency sensors (13 slots)
+#   16+     = 2-byte encoding: all remaining sensors
+#
+# All sensor fields are proto3 optional, giving has_<field> presence
+# tracking without needing a present_fields bitmask.
+#
+# Proto type mapping:
+#   float  → proto float,  SQL REAL
+#   double → proto double, SQL DOUBLE PRECISION
+#   uint32 → proto uint32, SQL INTEGER
+#   int32  → proto int32,  SQL INTEGER
+# ================================================================
+
+sensors:
+
+  # ── Engine (tags 3–6: 1-byte encoding) ─────────────────
+
+  engine_rpm:
+    tag: 3
+    quantity: rotational_speed
+    proto_type: float
+    group: engine
+    description: "Engine crankshaft speed"
+    min: 0
+    max: 20000
+    precision: 0
+    sample_rate_hz: 10
+
+  water_temp:
+    tag: 4
+    quantity: temperature
+    proto_type: float
+    group: engine
+    description: "Engine water/coolant temperature"
+    min: -40
+    max: 200
+    precision: 1
+
+  oil_temp:
+    tag: 5
+    quantity: temperature
+    proto_type: float
+    group: engine
+    description: "Engine oil temperature"
+    min: -40
+    max: 200
+    precision: 1
+
+  oil_pressure:
+    tag: 6
+    quantity: pressure
+    proto_type: float
+    group: engine
+    description: "Engine oil pressure"
+    min: 0
+    max: 1000
+    precision: 0
+
+  # ── Vehicle (tag 7: 1-byte encoding) ───────────────────
+
+  speed:
+    tag: 7
+    quantity: speed
+    proto_type: float
+    group: vehicle
+    description: "Vehicle speed (CAN-derived, typically from wheel speed or gearbox)"
+    min: 0
+    max: 400
+    precision: 1
+
+  # ── GPS (tags 8–9: 1-byte encoding) ────────────────────
+
+  latitude:
+    tag: 8
+    quantity: coordinate
+    proto_type: double
+    group: gps
+    description: "GPS latitude"
+    min: -90
+    max: 90
+    precision: 6
+
+  longitude:
+    tag: 9
+    quantity: coordinate
+    proto_type: double
+    group: gps
+    description: "GPS longitude"
+    min: -180
+    max: 180
+    precision: 6
+
+  # ── Engine / Intake (tags 10–12: 1-byte encoding) ──────
+
+  tps:
+    tag: 10
+    quantity: percentage
+    proto_type: float
+    group: engine
+    description: "Throttle position sensor"
+    min: 0
+    max: 100
+    precision: 1
+
+  map_kpa:
+    tag: 11
+    quantity: pressure
+    proto_type: float
+    group: engine
+    description: "Manifold absolute pressure"
+    min: 0
+    max: 400
+    precision: 0
+
+  lambda:
+    tag: 12
+    quantity: ratio
+    proto_type: float
+    group: engine
+    description: "Air-fuel ratio (lambda)"
+    min: 0.5
+    max: 1.5
+    precision: 3
+
+  # ── IMU (tags 13–14: 1-byte encoding) ──────────────────
+
+  lateral_g:
+    tag: 13
+    quantity: acceleration
+    proto_type: float
+    group: imu
+    description: "Lateral acceleration"
+    min: -5
+    max: 5
+    precision: 2
+    sample_rate_hz: 10
+
+  longitudinal_g:
+    tag: 14
+    quantity: acceleration
+    proto_type: float
+    group: imu
+    description: "Longitudinal acceleration"
+    min: -5
+    max: 5
+    precision: 2
+    sample_rate_hz: 10
+
+  # ── Engine / Intake (tag 15: 1-byte encoding) ──────────
+
+  iat:
+    tag: 15
+    quantity: temperature
+    proto_type: float
+    group: engine
+    description: "Intake air temperature"
+    min: -40
+    max: 100
+    precision: 1
+
+  # ── Fuel ────────────────────────────────────────────────
+
+  fuel_level:
+    tag: 16
+    quantity: percentage
+    proto_type: float
+    group: fuel
+    description: "Fuel tank level"
+    min: 0
+    max: 100
+    precision: 1
+
+  # ── Electrical ─────────────────────────────────────────
+
+  battery_voltage:
+    tag: 17
+    quantity: voltage
+    proto_type: float
+    group: electrical
+    description: "Vehicle battery voltage"
+    min: 0
+    max: 20
+    precision: 2
+
+  # ── Drivetrain ─────────────────────────────────────────
+
+  gear:
+    tag: 18
+    quantity: dimensionless
+    proto_type: uint32
+    group: drivetrain
+    description: "Current gear (0 = neutral)"
+    min: 0
+    max: 8
+    precision: 0
+
+  # ── Brakes ─────────────────────────────────────────────
+
+  brake_pressure_f:
+    tag: 19
+    quantity: pressure
+    proto_type: float
+    group: brakes
+    description: "Front brake line pressure"
+    min: 0
+    max: 15000
+    precision: 0
+
+  brake_pressure_r:
+    tag: 20
+    quantity: pressure
+    proto_type: float
+    group: brakes
+    description: "Rear brake line pressure"
+    min: 0
+    max: 15000
+    precision: 0
+
+  # ── Chassis / Steering ─────────────────────────────────
+
+  steering_angle:
+    tag: 21
+    quantity: angle
+    proto_type: float
+    group: chassis
+    description: "Steering wheel angle"
+    min: -900
+    max: 900
+    precision: 1
+
+  # ── IMU extended ───────────────────────────────────────
+
+  yaw_rate:
+    tag: 22
+    quantity: angular_rate
+    proto_type: float
+    group: imu
+    description: "Yaw rotation rate"
+    min: -300
+    max: 300
+    precision: 1
+
+  vertical_g:
+    tag: 23
+    quantity: acceleration
+    proto_type: float
+    group: imu
+    description: "Vertical acceleration"
+    min: -5
+    max: 5
+    precision: 2
+
+  # ── GPS extended ───────────────────────────────────────
+
+  gps_speed:
+    tag: 24
+    quantity: speed
+    proto_type: float
+    group: gps
+    description: "GPS-derived speed (enables wheel spin detection vs CAN speed)"
+    min: 0
+    max: 400
+    precision: 1
+
+  gps_satellites:
+    tag: 25
+    quantity: dimensionless
+    proto_type: uint32
+    group: gps
+    description: "Number of GPS satellites in fix"
+    min: 0
+    max: 32
+    precision: 0
+
+  gps_hdop:
+    tag: 26
+    quantity: dimensionless
+    proto_type: float
+    group: gps
+    description: "GPS horizontal dilution of precision (lower is better)"
+    min: 0
+    max: 50
+    precision: 1
+
+  altitude:
+    tag: 27
+    quantity: distance
+    proto_type: float
+    group: gps
+    description: "GPS altitude above sea level"
+    min: -100
+    max: 5000
+    precision: 1
+
+  # ── Tires: pressure (per-corner) ───────────────────────
+
+  tire_pressure_fl:
+    tag: 28
+    quantity: pressure
+    proto_type: float
+    group: tires
+    location: front_left
+    description: "Front-left tire pressure"
+    min: 0
+    max: 400
+    precision: 0
+
+  tire_pressure_fr:
+    tag: 29
+    quantity: pressure
+    proto_type: float
+    group: tires
+    location: front_right
+    description: "Front-right tire pressure"
+    min: 0
+    max: 400
+    precision: 0
+
+  tire_pressure_rl:
+    tag: 30
+    quantity: pressure
+    proto_type: float
+    group: tires
+    location: rear_left
+    description: "Rear-left tire pressure"
+    min: 0
+    max: 400
+    precision: 0
+
+  tire_pressure_rr:
+    tag: 31
+    quantity: pressure
+    proto_type: float
+    group: tires
+    location: rear_right
+    description: "Rear-right tire pressure"
+    min: 0
+    max: 400
+    precision: 0
+
+  # ── Tires: temperature (per-corner) ────────────────────
+
+  tire_temp_fl:
+    tag: 32
+    quantity: temperature
+    proto_type: float
+    group: tires
+    location: front_left
+    description: "Front-left tire temperature"
+    min: -20
+    max: 200
+    precision: 1
+
+  tire_temp_fr:
+    tag: 33
+    quantity: temperature
+    proto_type: float
+    group: tires
+    location: front_right
+    description: "Front-right tire temperature"
+    min: -20
+    max: 200
+    precision: 1
+
+  tire_temp_rl:
+    tag: 34
+    quantity: temperature
+    proto_type: float
+    group: tires
+    location: rear_left
+    description: "Rear-left tire temperature"
+    min: -20
+    max: 200
+    precision: 1
+
+  tire_temp_rr:
+    tag: 35
+    quantity: temperature
+    proto_type: float
+    group: tires
+    location: rear_right
+    description: "Rear-right tire temperature"
+    min: -20
+    max: 200
+    precision: 1
+
+# ================================================================
+# Reserved tags — retired sensor tag numbers that must NEVER be reused.
+# When removing a sensor, move its tag here with a note.
+# Format: tag_number: "original_sensor_name - reason (date)"
+# ================================================================
+
+reserved_tags: {}
+  # Example:
+  # 42: "old_sensor_name - replaced by new_sensor_name (2027-01-15)"

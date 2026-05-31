@@ -1,0 +1,196 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://racing.gus.is/schema/channels.schema.json",
+  "title": "Telemetry Channel Definitions",
+  "description": "Sensor definitions and physical quantity/unit metadata for the racetelem telemetry system. Source of truth for proto generation and DB migrations.",
+  "type": "object",
+  "required": ["schema_version", "quantities", "sensors", "reserved_tags"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Schema format version. Must be 1."
+    },
+    "quantities": {
+      "type": "object",
+      "description": "Physical measurement types with unit conversions. Sensors reference these by key.",
+      "additionalProperties": {
+        "$ref": "#/$defs/quantity"
+      },
+      "minProperties": 1
+    },
+    "sensors": {
+      "type": "object",
+      "description": "Telemetry channel definitions. Keys become proto field names and DB column names. Naming convention: {system}_{measurement}[_{location}]",
+      "additionalProperties": {
+        "$ref": "#/$defs/sensor"
+      },
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9_]*$",
+        "description": "Sensor names must be lowercase snake_case, valid as both protobuf field names and SQL column names."
+      },
+      "minProperties": 1
+    },
+    "reserved_tags": {
+      "type": "object",
+      "description": "Retired tag numbers that must NEVER be reused. Keys are tag numbers (as strings), values describe the original sensor and reason for retirement.",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "propertyNames": {
+        "pattern": "^[0-9]+$"
+      }
+    }
+  },
+  "$defs": {
+    "quantity": {
+      "type": "object",
+      "description": "A physical measurement type (e.g., temperature, pressure, speed) with a base unit and optional display unit conversions.",
+      "required": ["description", "base_unit", "units"],
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string",
+          "description": "Human-readable description of this physical quantity."
+        },
+        "base_unit": {
+          "type": "string",
+          "description": "Key of the base unit (must exist in 'units'). This is the unit stored on the wire and in the database."
+        },
+        "units": {
+          "type": "object",
+          "description": "Available units for this quantity. The base unit must be listed here (with only a symbol). Non-base units include scale and optional offset for conversion: display_value = base_value * scale + offset",
+          "additionalProperties": {
+            "$ref": "#/$defs/unit"
+          },
+          "minProperties": 1
+        }
+      }
+    },
+    "unit": {
+      "type": "object",
+      "description": "A unit of measurement. Base units need only a symbol. Non-base units require at least 'scale' for conversion: display_value = base_value * scale + offset",
+      "required": ["symbol"],
+      "additionalProperties": false,
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "description": "Display symbol for this unit (e.g., \"°C\", \"kPa\", \"rpm\"). Empty string for dimensionless."
+        },
+        "scale": {
+          "type": "number",
+          "description": "Multiplication factor to convert from base unit to this unit. Base units omit this (implicit 1.0).",
+          "exclusiveMinimum": 0
+        },
+        "offset": {
+          "type": "number",
+          "description": "Additive offset applied after scaling: display = base * scale + offset. Default: 0.",
+          "default": 0
+        }
+      }
+    },
+    "sensor": {
+      "type": "object",
+      "description": "A telemetry sensor/channel definition. The key becomes the proto field name and DB column name.",
+      "required": ["tag", "quantity", "proto_type", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "tag": {
+          "type": "integer",
+          "minimum": 3,
+          "maximum": 536870911,
+          "description": "Protobuf field number. IMMUTABLE once assigned — never change or reuse. Tags 1-2 are reserved for structural fields. Tags 3-15 get 1-byte encoding (use for highest-frequency sensors)."
+        },
+        "quantity": {
+          "type": "string",
+          "description": "Reference to a key in the 'quantities' section. Determines the base unit and available display units."
+        },
+        "proto_type": {
+          "type": "string",
+          "enum": ["float", "double", "uint32", "int32", "int64", "bytes"],
+          "description": "Protobuf field type. Maps to SQL: float→REAL, double→DOUBLE PRECISION, uint32/int32→INTEGER, int64→BIGINT, bytes→BYTEA."
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable description of what this sensor measures."
+        },
+        "group": {
+          "type": "string",
+          "description": "Organizational group for UI grouping and proto file comments.",
+          "examples": ["engine", "gps", "imu", "brakes", "tires", "chassis", "fuel", "electrical", "drivetrain", "vehicle", "aero"]
+        },
+        "location": {
+          "type": "string",
+          "enum": ["front_left", "front_right", "rear_left", "rear_right", "front", "rear"],
+          "description": "Spatial qualifier for per-corner or front/rear sensors."
+        },
+        "min": {
+          "type": "number",
+          "description": "Expected minimum value in base unit. For display range hints and validation."
+        },
+        "max": {
+          "type": "number",
+          "description": "Expected maximum value in base unit. For display range hints and validation."
+        },
+        "precision": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Decimal places for display (0 = integer). Default: 1.",
+          "default": 1
+        },
+        "sample_rate_hz": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Typical sample rate in Hz. Informational only, not enforced."
+        },
+        "can": {
+          "$ref": "#/$defs/can_mapping",
+          "description": "Default CAN bus mapping for your own sensor hardware."
+        }
+      }
+    },
+    "can_mapping": {
+      "type": "object",
+      "description": "CAN bus signal mapping for a sensor.",
+      "required": ["id", "start_bit", "length"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 536870911,
+          "description": "CAN arbitration ID (use hex in YAML: 0x360)."
+        },
+        "start_bit": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 63,
+          "description": "Start bit position in the CAN frame (0-63)."
+        },
+        "length": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64,
+          "description": "Bit length of the signal."
+        },
+        "byte_order": {
+          "type": "string",
+          "enum": ["little_endian", "big_endian"],
+          "default": "little_endian",
+          "description": "Byte order of the CAN signal. Default: little_endian."
+        },
+        "scale": {
+          "type": "number",
+          "description": "CAN raw-to-engineering scale factor. Default: 1.0.",
+          "default": 1.0
+        },
+        "offset": {
+          "type": "number",
+          "description": "CAN raw-to-engineering offset. Default: 0.",
+          "default": 0
+        }
+      }
+    }
+  }
+}
